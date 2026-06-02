@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nhiệt độ cao nhất theo model Open-Meteo</title>
+  <link rel="stylesheet" href="styles.css?v=5" />
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Open-Meteo forecast</p>
+        <h1>Nhiệt độ cao nhất hôm nay</h1>
+        <p class="subtitle">Dữ liệu `temperature_2m_max` theo từng model Open-Meteo, kèm Wunderground, MET Norway, ECMWF, Visual Crossing, WeatherAPI, OpenWeather và Tomorrow.io.</p>
+      </div>
+      <button id="refreshButton" type="button">Tải lại dữ liệu</button>
+    </section>
+
+    <section class="status-card" aria-live="polite">
+      <span id="statusDot" class="status-dot loading"></span>
+      <span id="statusText">Đang tải dữ liệu...</span>
+    </section>
+
+    <section id="airportGrid" class="airport-grid"></section>
+
+    <section class="analysis-panel">
+      <div class="analysis-header">
+        <div>
+          <p class="eyebrow">Forecast accuracy</p>
+          <h2>Nhập dữ liệu thực tế & xếp hạng mô hình</h2>
+          <p class="subtitle">Sau khi có nhiệt độ cao nhất thực tế, nhập vào đây để tính MAE, bias và RMSE cho từng nguồn/model.</p>
+        </div>
+        <button id="loadEvaluationButton" type="button">Cập nhật xếp hạng</button>
+      </div>
+
+      <div class="actuals-form">
+        <label class="date-field">
+          Ngày snapshot
+          <input id="actualDateInput" type="date" />
+        </label>
+        <div id="actualInputs" class="actual-inputs"></div>
+        <button id="saveActualsButton" type="button">Lưu dữ liệu thực tế</button>
+      </div>
+
+      <p id="actualsStatus" class="actuals-status">Chưa nhập dữ liệu thực tế.</p>
+      <div id="evaluationTable" class="evaluation-table"></div>
+    </section>
+  </main>
+
+  <template id="airportCardTemplate">
+    <article class="airport-card">
+      <header>
+        <div>
+          <p class="airport-code"></p>
+          <h2 class="airport-name"></h2>
+        </div>
+        <p class="airport-date"></p>
+      </header>
+      <div class="model-list"></div>
+    </article>
+  </template>
+
+  <template id="modelRowTemplate">
+    <div class="model-row">
+      <span class="model-name"></span>
+      <strong class="model-value"></strong>
+    </div>
+  </template>
+
+  <script src="app.js?v=5"></script>
+</body>
+</html>

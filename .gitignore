@@ -1,0 +1,6 @@
+.cache/
+snapshots/*.json
+.env
+.env.*
+*.log
+node_modules/
