@@ -95,7 +95,26 @@ function getBerlinDateKey(date = new Date()) {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
-function renderSourceRow(sourceForecast) {
+function appendDeltaBadge(row, forecastC, actualC) {
+  const badge = document.createElement("span");
+  badge.className = "model-delta";
+
+  if (typeof forecastC === "number" && typeof actualC === "number") {
+    const delta = Math.round((forecastC - actualC) * 10) / 10;
+    const sign = delta > 0 ? "+" : "";
+    badge.textContent = `${sign}${delta.toFixed(1)}°`;
+    const absError = Math.abs(delta);
+    badge.classList.add(absError <= 1 ? "delta-good" : absError <= 2.5 ? "delta-mid" : "delta-bad");
+    badge.title = `Sai số so với thực tế ${actualC.toFixed(1)} °C`;
+  } else {
+    badge.textContent = "—";
+    badge.classList.add("delta-na");
+  }
+
+  row.append(badge);
+}
+
+function renderSourceRow(sourceForecast, actualC) {
   const row = modelRowTemplate.content.firstElementChild.cloneNode(true);
   row.classList.add("external-source-row");
 
@@ -124,6 +143,10 @@ function renderSourceRow(sourceForecast) {
   const detail = sourceForecast?.error || sourceForecast?.raw;
   if (detail) {
     row.title = detail;
+  }
+
+  if (typeof actualC === "number") {
+    appendDeltaBadge(row, sourceForecast?.temperatureMaxC, actualC);
   }
 
   return row;
@@ -377,7 +400,7 @@ async function loadEvaluation() {
   }
 }
 
-function renderSnapshotModelRow(forecast) {
+function renderSnapshotModelRow(forecast, actualC) {
   const row = modelRowTemplate.content.firstElementChild.cloneNode(true);
 
   if (forecast?.error) {
@@ -392,6 +415,10 @@ function renderSnapshotModelRow(forecast) {
     row.title = detail;
   }
 
+  if (typeof actualC === "number") {
+    appendDeltaBadge(row, forecast?.temperatureMaxC, actualC);
+  }
+
   return row;
 }
 
@@ -403,6 +430,12 @@ function renderActualRow(actual) {
   if (actual.note) {
     row.title = actual.note;
   }
+
+  const badge = document.createElement("span");
+  badge.className = "model-delta delta-na";
+  badge.textContent = "mốc";
+  row.append(badge);
+
   return row;
 }
 
@@ -417,16 +450,19 @@ function renderSnapshotCard(airport, snapshotDate, actualForAirport) {
   card.querySelector(".airport-date").textContent = snapshotDate || "";
 
   const modelList = card.querySelector(".model-list");
+  const actualC = actualForAirport && typeof actualForAirport.temperatureMaxC === "number"
+    ? actualForAirport.temperatureMaxC
+    : undefined;
 
-  if (actualForAirport && typeof actualForAirport.temperatureMaxC === "number") {
+  if (actualC !== undefined) {
     appendSectionLabel(modelList, "Thực tế");
     modelList.append(renderActualRow(actualForAirport));
   }
 
   appendSectionLabel(modelList, "Nguồn bổ sung");
-  externalSources.forEach((forecast) => modelList.append(renderSourceRow(forecast)));
+  externalSources.forEach((forecast) => modelList.append(renderSourceRow(forecast, actualC)));
   appendSectionLabel(modelList, "Open-Meteo models");
-  openMeteoModels.forEach((forecast) => modelList.append(renderSnapshotModelRow(forecast)));
+  openMeteoModels.forEach((forecast) => modelList.append(renderSnapshotModelRow(forecast, actualC)));
 
   return card;
 }

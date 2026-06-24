@@ -343,6 +343,22 @@ button:disabled { cursor: wait; opacity: 0.72; transform: none; }
 
 #snapshotGrid:empty { display: none; }
 
+#snapshotGrid .model-name { flex: 1 1 auto; }
+#snapshotGrid .model-value { min-width: 76px; text-align: right; }
+
+.model-delta {
+  flex: none;
+  min-width: 62px;
+  text-align: right;
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.delta-good { color: #86efac; text-shadow: 0 0 16px rgba(34, 197, 94, 0.22); }
+.delta-mid { color: #fde68a; }
+.delta-bad { color: #fca5a5; text-shadow: 0 0 16px rgba(251, 113, 133, 0.22); }
+.delta-na { color: var(--muted); font-weight: 700; }
+
 select {
   width: 100%;
   border: 1px solid rgba(148, 163, 184, 0.24);
