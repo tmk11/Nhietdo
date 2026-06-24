@@ -287,7 +287,7 @@ function getSourceUrl(source, airport) {
   if (source === 'Visual Crossing') return `https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/${airport.latitude},${airport.longitude}/today`;
   if (source === 'WeatherAPI.com') return `https://api.weatherapi.com/v1/forecast.json?q=${airport.latitude},${airport.longitude}&days=1`;
   if (source === 'ECMWF IFS') return `https://api.open-meteo.com/v1/forecast?latitude=${airport.latitude}&longitude=${airport.longitude}&daily=temperature_2m_max&models=ecmwf_ifs025&timezone=auto&forecast_days=1`;
-  if (source === 'OpenWeather') return `https://api.openweathermap.org/data/4.0/onecall/timeline/1day?lat=${airport.latitude}&lon=${airport.longitude}&units=metric`;
+  if (source === 'OpenWeather') return `https://api.openweathermap.org/data/3.0/onecall?lat=${airport.latitude}&lon=${airport.longitude}&exclude=current,minutely,hourly,alerts&units=metric`;
   if (source === 'Tomorrow.io') return `https://api.tomorrow.io/v4/weather/forecast?location=${airport.latitude},${airport.longitude}&timesteps=1d&units=metric&timezone=${encodeURIComponent(airport.timeZone || 'UTC')}`;
   if (source === 'DWD MOSMIX') {
     const station = DWD_MOSMIX_STATIONS[airport.code];
@@ -437,18 +437,22 @@ async function fetchWundergroundAirport(airport) {
     throw new Error(`Wunderground API thiếu dữ liệu daily cho ${airport.code}`);
   }
 
-  let pickedIndex = temperatureMax.findIndex((value) => typeof value === 'number');
-  let tempC = pickedIndex >= 0 ? temperatureMax[pickedIndex] : null;
-  let field = 'temperatureMax';
+  const targetDate = getLocalDateKey(new Date(), airport.timeZone);
+  let pickedIndex = validTimeLocal.findIndex((value) => String(value || '').slice(0, 10) === targetDate);
+  if (pickedIndex < 0) pickedIndex = 0;
+
+  // calendarDayTemperatureMax là max theo lịch của đúng ngày; temperatureMax (rolling)
+  // có thể bị null sau khi đỉnh nhiệt trong ngày đã trôi qua nên dùng làm dự phòng.
+  let tempC = calendarDayMax[pickedIndex];
+  let field = 'calendarDayTemperatureMax';
 
   if (typeof tempC !== 'number') {
-    pickedIndex = calendarDayMax.findIndex((value) => typeof value === 'number');
-    tempC = pickedIndex >= 0 ? calendarDayMax[pickedIndex] : null;
-    field = 'calendarDayTemperatureMax';
+    tempC = temperatureMax[pickedIndex];
+    field = 'temperatureMax';
   }
 
   if (typeof tempC !== 'number') {
-    throw new Error(`Wunderground API không có nhiệt độ tối đa cho ${airport.code}`);
+    throw new Error(`Wunderground API không có nhiệt độ tối đa hôm nay cho ${airport.code}`);
   }
 
   const pickedDate = String(validTimeLocal[pickedIndex] || '').slice(0, 10);
@@ -471,11 +475,26 @@ async function fetchMetNorwayAirport(airport) {
 
   const targetDate = getLocalDateKey(new Date(), airport.timeZone);
   const samples = (data.properties?.timeseries || [])
-    .map((item) => ({
-      time: item.time,
-      localDate: getLocalDateKey(item.time, airport.timeZone),
-      value: item.data?.instant?.details?.air_temperature,
-    }))
+    .map((item) => {
+      const instant = item.data?.instant?.details?.air_temperature;
+      const periodMax = item.data?.next_6_hours?.details?.air_temperature_max;
+      let value = null;
+      let kind = null;
+      if (typeof periodMax === 'number') {
+        value = periodMax;
+        kind = 'next_6_hours air_temperature_max';
+      }
+      if (typeof instant === 'number' && (value === null || instant > value)) {
+        value = instant;
+        kind = 'instant';
+      }
+      return {
+        time: item.time,
+        localDate: getLocalDateKey(item.time, airport.timeZone),
+        value,
+        kind,
+      };
+    })
     .filter((item) => item.localDate === targetDate && typeof item.value === 'number');
 
   if (!samples.length) {
@@ -485,7 +504,7 @@ async function fetchMetNorwayAirport(airport) {
   const maxSample = samples.reduce((best, item) => (item.value > best.value ? item : best), samples[0]);
   return buildForecastResult(airport, source, 'MET Norway / Yr.no', sourceUrl, {
     ...normalizeTemperature(maxSample.value, 'C'),
-    raw: `${samples.length} điểm forecast cho ngày ${targetDate}; max tại ${maxSample.time}`,
+    raw: `${samples.length} điểm forecast cho ngày ${targetDate}; max ${maxSample.kind} tại ${maxSample.time}`,
   });
 }
 
@@ -648,7 +667,7 @@ async function fetchWeatherApiAirport(airport) {
 }
 
 function getOpenWeatherDailyMax(data) {
-  return data.data?.[0]?.temp?.max ?? data.daily?.[0]?.temp?.max;
+  return data.daily?.[0]?.temp?.max ?? data.data?.[0]?.temp?.max;
 }
 
 async function fetchOpenWeatherAirport(airport) {
@@ -662,36 +681,12 @@ async function fetchOpenWeatherAirport(airport) {
     });
   }
 
-  const oneCall4Url = new URL(sourceUrl);
-  oneCall4Url.searchParams.set('appid', OPENWEATHER_API_KEY);
+  const oneCallUrl = new URL(sourceUrl);
+  oneCallUrl.searchParams.set('appid', OPENWEATHER_API_KEY);
 
   let oneCallError;
   try {
-    const data = await fetchJson(oneCall4Url);
-    const tempMax = getOpenWeatherDailyMax(data);
-    const normalized = normalizeTemperature(tempMax, 'C');
-
-    if (!normalized) {
-      throw new Error(`Không có data[0].temp.max từ OpenWeather One Call 4.0 cho ${airport.code}`);
-    }
-
-    return buildForecastResult(airport, source, label, sourceUrl, {
-      ...normalized,
-      raw: `onecall 4.0 data[0].temp.max=${tempMax}°C; dt=${data.data?.[0]?.dt || 'today'}`,
-    });
-  } catch (error) {
-    oneCallError = error;
-  }
-
-  const oneCall3Url = new URL('https://api.openweathermap.org/data/3.0/onecall');
-  oneCall3Url.searchParams.set('lat', airport.latitude);
-  oneCall3Url.searchParams.set('lon', airport.longitude);
-  oneCall3Url.searchParams.set('exclude', 'current,minutely,hourly,alerts');
-  oneCall3Url.searchParams.set('units', 'metric');
-  oneCall3Url.searchParams.set('appid', OPENWEATHER_API_KEY);
-
-  try {
-    const data = await fetchJson(oneCall3Url);
+    const data = await fetchJson(oneCallUrl);
     const tempMax = getOpenWeatherDailyMax(data);
     const normalized = normalizeTemperature(tempMax, 'C');
 
@@ -699,50 +694,53 @@ async function fetchOpenWeatherAirport(airport) {
       throw new Error(`Không có daily[0].temp.max từ OpenWeather One Call 3.0 cho ${airport.code}`);
     }
 
-    return buildForecastResult(airport, source, label, 'https://api.openweathermap.org/data/3.0/onecall', {
+    return buildForecastResult(airport, source, label, sourceUrl, {
       ...normalized,
       raw: `onecall 3.0 daily[0].temp.max=${tempMax}°C; dt=${data.daily?.[0]?.dt || 'today'}`,
     });
-  } catch (oneCall3Error) {
-    const forecastUrl = new URL('https://api.openweathermap.org/data/2.5/forecast');
-    forecastUrl.searchParams.set('lat', airport.latitude);
-    forecastUrl.searchParams.set('lon', airport.longitude);
-    forecastUrl.searchParams.set('units', 'metric');
-    forecastUrl.searchParams.set('appid', OPENWEATHER_API_KEY);
-
-    let data;
-    try {
-      data = await fetchJson(forecastUrl);
-    } catch (fallbackError) {
-      if (/invalid api key|401/i.test(fallbackError.message)) {
-        return buildErrorResult(airport, source, label, sourceUrl, 'OPENWEATHER_API_KEY chưa active hoặc chưa bật One Call 4.0', {
-          configured: false,
-          requiredEnv: envName,
-          authError: true,
-        });
-      }
-
-      throw fallbackError;
-    }
-    const targetDate = getLocalDateKey(new Date(), airport.timeZone);
-    const samples = (data.list || [])
-      .map((item) => ({
-        time: item.dt_txt || new Date(item.dt * 1000).toISOString(),
-        localDate: getLocalDateKey((item.dt || 0) * 1000, airport.timeZone),
-        value: item.main?.temp_max,
-      }))
-      .filter((item) => item.localDate === targetDate && typeof item.value === 'number');
-
-    if (!samples.length) {
-      throw new Error(`OpenWeather One Call 4.0 lỗi: ${oneCallError.message}; One Call 3.0 lỗi: ${oneCall3Error.message}; không có forecast temp_max hôm nay cho ${airport.code}`);
-    }
-
-    const maxSample = samples.reduce((best, item) => (item.value > best.value ? item : best), samples[0]);
-    return buildForecastResult(airport, source, label, 'https://api.openweathermap.org/data/2.5/forecast', {
-      ...normalizeTemperature(maxSample.value, 'C'),
-      raw: `forecast 3h fallback; ${samples.length} điểm ngày ${targetDate}; max tại ${maxSample.time}; onecall unavailable`,
-    });
+  } catch (error) {
+    oneCallError = error;
   }
+
+  const forecastUrl = new URL('https://api.openweathermap.org/data/2.5/forecast');
+  forecastUrl.searchParams.set('lat', airport.latitude);
+  forecastUrl.searchParams.set('lon', airport.longitude);
+  forecastUrl.searchParams.set('units', 'metric');
+  forecastUrl.searchParams.set('appid', OPENWEATHER_API_KEY);
+
+  let data;
+  try {
+    data = await fetchJson(forecastUrl);
+  } catch (fallbackError) {
+    if (/invalid api key|401/i.test(fallbackError.message)) {
+      return buildErrorResult(airport, source, label, sourceUrl, 'OPENWEATHER_API_KEY chưa active hoặc chưa bật One Call 3.0', {
+        configured: false,
+        requiredEnv: envName,
+        authError: true,
+      });
+    }
+
+    throw fallbackError;
+  }
+
+  const targetDate = getLocalDateKey(new Date(), airport.timeZone);
+  const samples = (data.list || [])
+    .map((item) => ({
+      time: item.dt_txt || new Date(item.dt * 1000).toISOString(),
+      localDate: getLocalDateKey((item.dt || 0) * 1000, airport.timeZone),
+      value: item.main?.temp_max,
+    }))
+    .filter((item) => item.localDate === targetDate && typeof item.value === 'number');
+
+  if (!samples.length) {
+    throw new Error(`OpenWeather One Call 3.0 lỗi: ${oneCallError.message}; không có forecast temp_max hôm nay cho ${airport.code}`);
+  }
+
+  const maxSample = samples.reduce((best, item) => (item.value > best.value ? item : best), samples[0]);
+  return buildForecastResult(airport, source, label, 'https://api.openweathermap.org/data/2.5/forecast', {
+    ...normalizeTemperature(maxSample.value, 'C'),
+    raw: `forecast 3h fallback; ${samples.length} điểm ngày ${targetDate}; max tại ${maxSample.time}; onecall unavailable`,
+  });
 }
 
 async function fetchTomorrowAirport(airport) {
