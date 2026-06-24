@@ -320,7 +320,8 @@ button:disabled { cursor: wait; opacity: 0.72; transform: none; }
   .airport-date { align-self: flex-start; }
 }
 
-.analysis-panel {
+.analysis-panel,
+.snapshot-panel {
   margin-top: 28px;
   padding: 26px;
   border: 1px solid var(--line);
@@ -328,6 +329,34 @@ button:disabled { cursor: wait; opacity: 0.72; transform: none; }
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.82), rgba(30, 41, 59, 0.52));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.06);
   backdrop-filter: blur(18px);
+}
+
+.snapshot-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.snapshot-controls .date-field { max-width: 280px; }
+
+#snapshotGrid:empty { display: none; }
+
+select {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 14px;
+  padding: 12px 13px;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.72);
+  outline: none;
+  cursor: pointer;
+}
+
+select:focus {
+  border-color: rgba(56, 189, 248, 0.62);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
 }
 
 .analysis-header {

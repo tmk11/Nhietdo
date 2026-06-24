@@ -40,6 +40,10 @@ const saveActualsButton = document.querySelector("#saveActualsButton");
 const loadEvaluationButton = document.querySelector("#loadEvaluationButton");
 const actualsStatus = document.querySelector("#actualsStatus");
 const evaluationTable = document.querySelector("#evaluationTable");
+const snapshotDateSelect = document.querySelector("#snapshotDateSelect");
+const loadSnapshotButton = document.querySelector("#loadSnapshotButton");
+const snapshotGrid = document.querySelector("#snapshotGrid");
+const snapshotMeta = document.querySelector("#snapshotMeta");
 const airportTemplate = document.querySelector("#airportCardTemplate");
 const modelRowTemplate = document.querySelector("#modelRowTemplate");
 
@@ -373,9 +377,148 @@ async function loadEvaluation() {
   }
 }
 
+function renderSnapshotModelRow(forecast) {
+  const row = modelRowTemplate.content.firstElementChild.cloneNode(true);
+
+  if (forecast?.error) {
+    row.classList.add("source-error-row");
+  }
+
+  row.querySelector(".model-name").textContent = forecast?.model || forecast?.label || forecast?.source || "Model";
+  row.querySelector(".model-value").textContent = formatExternalTemperature(forecast);
+
+  const detail = forecast?.error || forecast?.raw;
+  if (detail) {
+    row.title = detail;
+  }
+
+  return row;
+}
+
+function renderActualRow(actual) {
+  const row = modelRowTemplate.content.firstElementChild.cloneNode(true);
+  row.classList.add("external-source-row", "wunderground-row");
+  row.querySelector(".model-name").textContent = "Thực tế (đo)";
+  row.querySelector(".model-value").textContent = `${actual.temperatureMaxC.toFixed(1)} °C`;
+  if (actual.note) {
+    row.title = actual.note;
+  }
+  return row;
+}
+
+function renderSnapshotCard(airport, snapshotDate, actualForAirport) {
+  const card = airportTemplate.content.firstElementChild.cloneNode(true);
+  const forecasts = airport.forecasts || [];
+  const externalSources = forecasts.filter((forecast) => forecast.source !== "Open-Meteo");
+  const openMeteoModels = forecasts.filter((forecast) => forecast.source === "Open-Meteo");
+
+  card.querySelector(".airport-code").textContent = airport.code;
+  card.querySelector(".airport-name").textContent = airport.name;
+  card.querySelector(".airport-date").textContent = snapshotDate || "";
+
+  const modelList = card.querySelector(".model-list");
+
+  if (actualForAirport && typeof actualForAirport.temperatureMaxC === "number") {
+    appendSectionLabel(modelList, "Thực tế");
+    modelList.append(renderActualRow(actualForAirport));
+  }
+
+  appendSectionLabel(modelList, "Nguồn bổ sung");
+  externalSources.forEach((forecast) => modelList.append(renderSourceRow(forecast)));
+  appendSectionLabel(modelList, "Open-Meteo models");
+  openMeteoModels.forEach((forecast) => modelList.append(renderSnapshotModelRow(forecast)));
+
+  return card;
+}
+
+function renderSnapshot(snapshot, actualsForDate = {}) {
+  snapshotGrid.replaceChildren();
+  const airports = snapshot.airports || [];
+
+  AIRPORTS.forEach((meta) => {
+    const airport = airports.find((item) => item.code === meta.code);
+    if (!airport) return;
+    const card = renderSnapshotCard(
+      { ...airport, name: airport.name || meta.name },
+      snapshot.date,
+      actualsForDate[airport.code],
+    );
+    snapshotGrid.append(card);
+  });
+}
+
+async function loadSnapshot(date) {
+  if (!date) return;
+
+  loadSnapshotButton.disabled = true;
+  snapshotMeta.textContent = `Đang tải snapshot ${date}...`;
+
+  try {
+    const [snapshot, actuals] = await Promise.all([
+      fetch(`/api/snapshots/${date}`).then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || `HTTP ${response.status}`);
+        }
+        return payload;
+      }),
+      fetch("/api/actuals").then((response) => response.json()).catch(() => ({ dates: {} })),
+    ]);
+
+    const actualsForDate = (actuals.dates && actuals.dates[date]) || {};
+    renderSnapshot(snapshot, actualsForDate);
+
+    const createdAt = snapshot.createdAt
+      ? new Date(snapshot.createdAt).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" })
+      : "—";
+    snapshotMeta.textContent = `Snapshot ${snapshot.date} · tạo lúc ${createdAt} · ${snapshot.airports?.length || 0} sân bay`;
+  } catch (error) {
+    snapshotGrid.replaceChildren();
+    snapshotMeta.textContent = `Không tải được snapshot: ${error.message}`;
+  } finally {
+    loadSnapshotButton.disabled = false;
+  }
+}
+
+async function loadSnapshotList() {
+  try {
+    const response = await fetch("/api/snapshots");
+    const payload = await response.json();
+    const snapshots = (payload.snapshots || [])
+      .slice()
+      .sort((left, right) => (left.date < right.date ? 1 : -1));
+
+    snapshotDateSelect.replaceChildren();
+
+    if (!snapshots.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Chưa có snapshot";
+      snapshotDateSelect.append(option);
+      snapshotMeta.textContent = "Chưa có snapshot nào được lưu.";
+      return;
+    }
+
+    snapshots.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.date;
+      option.textContent = `${item.date} (${item.airportCount} sân bay)`;
+      snapshotDateSelect.append(option);
+    });
+
+    snapshotDateSelect.value = snapshots[0].date;
+    await loadSnapshot(snapshots[0].date);
+  } catch (error) {
+    snapshotMeta.textContent = `Không tải được danh sách snapshot: ${error.message}`;
+  }
+}
+
 refreshButton.addEventListener("click", () => loadForecasts({ forceRefresh: true }));
 saveActualsButton.addEventListener("click", saveActuals);
 loadEvaluationButton.addEventListener("click", loadEvaluation);
+snapshotDateSelect.addEventListener("change", () => loadSnapshot(snapshotDateSelect.value));
+loadSnapshotButton.addEventListener("click", () => loadSnapshot(snapshotDateSelect.value));
 initializeActualsForm();
 loadForecasts();
 loadEvaluation();
+loadSnapshotList();
