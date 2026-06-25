@@ -332,14 +332,114 @@ button:disabled { cursor: wait; opacity: 0.72; transform: none; }
 }
 
 .snapshot-controls {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 18px;
   margin-bottom: 20px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.92);
+  backdrop-filter: blur(12px);
 }
 
 .snapshot-controls .date-field { max-width: 280px; }
+
+.snapshot-mode {
+  display: inline-flex;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.mode-tab {
+  flex: none;
+  margin: 0;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.mode-tab:hover { transform: none; filter: none; color: #f8fafc; }
+
+.mode-tab.is-active {
+  color: #06111f;
+  background: linear-gradient(135deg, #7dd3fc 0%, #a5b4fc 100%);
+  box-shadow: 0 10px 22px rgba(56, 189, 248, 0.24);
+}
+
+.day-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.day-history {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+.day-history[open] { border-color: rgba(125, 211, 252, 0.34); }
+
+.day-history > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  cursor: pointer;
+  list-style: none;
+  padding: 16px 18px;
+}
+
+.day-history > summary::-webkit-details-marker { display: none; }
+
+.day-history > summary::after {
+  content: "▾";
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.day-history[open] > summary::after { transform: rotate(180deg); }
+
+.day-date {
+  color: var(--primary);
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 18px rgba(56, 189, 248, 0.3);
+}
+
+.day-weekday { color: var(--muted); font-size: 0.9rem; }
+
+.day-actual {
+  padding: 5px 12px;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.day-actual-empty {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.6);
+  color: var(--muted);
+}
 
 #snapshotGrid:empty { display: none; }
 

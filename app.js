@@ -41,6 +41,11 @@ const loadEvaluationButton = document.querySelector("#loadEvaluationButton");
 const actualsStatus = document.querySelector("#actualsStatus");
 const evaluationTable = document.querySelector("#evaluationTable");
 const snapshotDateSelect = document.querySelector("#snapshotDateSelect");
+const snapshotAirportSelect = document.querySelector("#snapshotAirportSelect");
+const snapshotDateField = document.querySelector("#snapshotDateField");
+const snapshotAirportField = document.querySelector("#snapshotAirportField");
+const snapshotModeDateButton = document.querySelector("#snapshotModeDate");
+const snapshotModeAirportButton = document.querySelector("#snapshotModeAirport");
 const loadSnapshotButton = document.querySelector("#loadSnapshotButton");
 const snapshotGrid = document.querySelector("#snapshotGrid");
 const snapshotMeta = document.querySelector("#snapshotMeta");
@@ -549,12 +554,131 @@ async function loadSnapshotList() {
   }
 }
 
+function formatWeekday(dateKey) {
+  const date = new Date(`${dateKey}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit" });
+}
+
+function appendForecastRows(modelList, forecasts, actualC) {
+  const externalSources = forecasts.filter((forecast) => forecast.source !== "Open-Meteo");
+  const openMeteoModels = forecasts.filter((forecast) => forecast.source === "Open-Meteo");
+
+  appendSectionLabel(modelList, "Nguồn bổ sung");
+  externalSources.forEach((forecast) => modelList.append(renderSourceRow(forecast, actualC)));
+  appendSectionLabel(modelList, "Open-Meteo models");
+  openMeteoModels.forEach((forecast) => modelList.append(renderSnapshotModelRow(forecast, actualC)));
+}
+
+function renderDayHistory(day, expanded) {
+  const details = document.createElement("details");
+  details.className = "day-history";
+  details.open = Boolean(expanded);
+
+  const actualC = day.actual && typeof day.actual.temperatureMaxC === "number"
+    ? day.actual.temperatureMaxC
+    : undefined;
+
+  const summary = document.createElement("summary");
+  const actualBadge = actualC !== undefined ? `${actualC.toFixed(1)}°C` : "—";
+  const actualClass = actualC !== undefined ? "day-actual" : "day-actual day-actual-empty";
+  summary.innerHTML = `
+    <span class="day-date">${day.date}</span>
+    <span class="day-weekday">${formatWeekday(day.date)}</span>
+    <span class="${actualClass}">Thực tế ${actualBadge}</span>
+  `;
+  details.append(summary);
+
+  const modelList = document.createElement("div");
+  modelList.className = "model-list";
+  appendForecastRows(modelList, day.forecasts || [], actualC);
+  details.append(modelList);
+
+  return details;
+}
+
+async function loadAirportHistory(code) {
+  if (!code) return;
+
+  loadSnapshotButton.disabled = true;
+  snapshotMeta.textContent = `Đang tải lịch sử ${code}...`;
+
+  try {
+    const response = await fetch(`/api/airport-history/${code}`);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+
+    snapshotGrid.className = "day-history-list";
+    snapshotGrid.replaceChildren();
+
+    const days = payload.days || [];
+    if (!days.length) {
+      snapshotMeta.textContent = `Chưa có snapshot nào cho ${code}.`;
+      return;
+    }
+
+    days.forEach((day, index) => snapshotGrid.append(renderDayHistory(day, index === 0)));
+
+    const withActual = days.filter((day) => day.actual && typeof day.actual.temperatureMaxC === "number").length;
+    snapshotMeta.textContent = `${payload.name || code} · ${days.length} ngày · ${withActual} ngày có thực tế`;
+  } catch (error) {
+    snapshotGrid.className = "airport-grid";
+    snapshotGrid.replaceChildren();
+    snapshotMeta.textContent = `Không tải được lịch sử: ${error.message}`;
+  } finally {
+    loadSnapshotButton.disabled = false;
+  }
+}
+
+function initializeSnapshotAirportSelect() {
+  snapshotAirportSelect.replaceChildren();
+  AIRPORTS.forEach((airport) => {
+    const option = document.createElement("option");
+    option.value = airport.code;
+    option.textContent = `${airport.code} · ${airport.name}`;
+    snapshotAirportSelect.append(option);
+  });
+}
+
+function reloadSnapshotView() {
+  if (snapshotMode === "airport") {
+    loadAirportHistory(snapshotAirportSelect.value);
+  } else {
+    loadSnapshot(snapshotDateSelect.value);
+  }
+}
+
+function setSnapshotMode(mode) {
+  snapshotMode = mode;
+  const airportMode = mode === "airport";
+
+  snapshotModeAirportButton.classList.toggle("is-active", airportMode);
+  snapshotModeDateButton.classList.toggle("is-active", !airportMode);
+  snapshotDateField.hidden = airportMode;
+  snapshotAirportField.hidden = !airportMode;
+
+  if (airportMode) {
+    loadAirportHistory(snapshotAirportSelect.value);
+  } else {
+    snapshotGrid.className = "airport-grid";
+    loadSnapshot(snapshotDateSelect.value);
+  }
+}
+
+let snapshotMode = "date";
+
 refreshButton.addEventListener("click", () => loadForecasts({ forceRefresh: true }));
 saveActualsButton.addEventListener("click", saveActuals);
 loadEvaluationButton.addEventListener("click", loadEvaluation);
 snapshotDateSelect.addEventListener("change", () => loadSnapshot(snapshotDateSelect.value));
-loadSnapshotButton.addEventListener("click", () => loadSnapshot(snapshotDateSelect.value));
+snapshotAirportSelect.addEventListener("change", () => loadAirportHistory(snapshotAirportSelect.value));
+snapshotModeDateButton.addEventListener("click", () => setSnapshotMode("date"));
+snapshotModeAirportButton.addEventListener("click", () => setSnapshotMode("airport"));
+loadSnapshotButton.addEventListener("click", reloadSnapshotView);
 initializeActualsForm();
+initializeSnapshotAirportSelect();
 loadForecasts();
 loadEvaluation();
 loadSnapshotList();

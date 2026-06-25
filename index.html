@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Nhiệt độ cao nhất theo model Open-Meteo</title>
-  <link rel="stylesheet" href="styles.css?v=7" />
+  <link rel="stylesheet" href="styles.css?v=8" />
 </head>
 <body>
   <main class="page-shell">
@@ -28,16 +28,24 @@
       <div class="analysis-header">
         <div>
           <p class="eyebrow">Snapshot history</p>
-          <h2>Xem lại snapshot theo ngày</h2>
-          <p class="subtitle">Chọn một ngày để xem lại nhiệt độ cao nhất đã được lưu của từng nguồn/model tại thời điểm chụp (09:30 Europe/Berlin), kèm so sánh với nhiệt độ thực tế nếu đã nhập.</p>
+          <h2>Xem lại snapshot</h2>
+          <p class="subtitle">Xem nhiệt độ cao nhất đã lưu của từng nguồn/model. Chế độ <strong>Theo ngày</strong>: 1 ngày × 6 sân bay. Chế độ <strong>Theo địa điểm</strong>: chọn 1 sân bay rồi cuộn qua nhiều ngày — tiện trên điện thoại.</p>
         </div>
-        <button id="loadSnapshotButton" type="button">Tải snapshot</button>
+        <button id="loadSnapshotButton" type="button">Tải lại</button>
       </div>
 
       <div class="snapshot-controls">
-        <label class="date-field">
+        <div class="snapshot-mode" role="tablist">
+          <button id="snapshotModeDate" type="button" class="mode-tab is-active">Theo ngày</button>
+          <button id="snapshotModeAirport" type="button" class="mode-tab">Theo địa điểm</button>
+        </div>
+        <label class="date-field" id="snapshotDateField">
           Ngày snapshot
           <select id="snapshotDateSelect"></select>
+        </label>
+        <label class="date-field" id="snapshotAirportField" hidden>
+          Sân bay
+          <select id="snapshotAirportSelect"></select>
         </label>
         <p id="snapshotMeta" class="actuals-status"></p>
       </div>
@@ -89,6 +97,6 @@
     </div>
   </template>
 
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

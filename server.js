@@ -1376,6 +1376,36 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && /^\/api\/airport-history\/[A-Za-z]{3,4}$/.test(requestUrl.pathname)) {
+    const code = requestUrl.pathname.split('/').pop().toUpperCase();
+    const airport = AIRPORTS.find((item) => item.code === code);
+
+    if (!airport) {
+      sendJson(res, 404, { error: `Không tìm thấy sân bay ${code}` });
+      return;
+    }
+
+    const actuals = readActuals();
+    const days = [];
+
+    for (const info of listSnapshots()) {
+      const snapshot = readJsonFile(getSnapshotPath(info.date), null);
+      const airportSnapshot = snapshot?.airports?.find((item) => item.code === code);
+      if (!airportSnapshot) continue;
+
+      days.push({
+        date: snapshot.date || info.date,
+        createdAt: snapshot.createdAt,
+        actual: actuals.dates?.[info.date]?.[code] || null,
+        forecasts: airportSnapshot.forecasts || [],
+      });
+    }
+
+    days.sort((left, right) => (left.date < right.date ? 1 : -1));
+    sendJson(res, 200, { code, name: airport.name, days });
+    return;
+  }
+
   if (req.method === 'GET' && requestUrl.pathname === '/api/actuals') {
     sendJson(res, 200, readActuals());
     return;
