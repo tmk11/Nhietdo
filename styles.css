@@ -478,6 +478,35 @@ input:focus {
 .airport-evaluation td { color: #e2e8f0; }
 .airport-evaluation tr:last-child td { border-bottom: 0; }
 
+.prob-meta {
+  margin: 10px 4px 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.prob-error {
+  margin: 10px 4px 4px;
+  color: #fecdd3;
+  font-size: 0.9rem;
+}
+
+.market-price-input {
+  width: 84px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+}
+
+.ev-cell { font-weight: 800; }
+
+.ev-positive {
+  color: #bbf7d0;
+  text-shadow: 0 0 16px rgba(34, 197, 94, 0.3);
+}
+
+.ev-negative { color: #fda4af; }
+
 @media (max-width: 720px) {
   .analysis-panel { padding: 20px; border-radius: 24px; }
   .analysis-header { flex-direction: column; }

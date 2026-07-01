@@ -23,6 +23,11 @@ const OPEN_METEO_CACHE_FILE = path.join(CACHE_DIR, 'open-meteo.json');
 const WUNDERGROUND_CACHE_FILE = path.join(CACHE_DIR, 'wunderground.json');
 const EXTERNAL_CACHE_FILE = path.join(CACHE_DIR, 'external-forecasts.json');
 const TOMORROW_CACHE_FILE = path.join(CACHE_DIR, 'tomorrow-forecasts.json');
+const PROBABILITIES_CACHE_FILE = path.join(CACHE_DIR, 'probabilities.json');
+// Sigma mặc định của kernel làm mượt phân phối member khi chưa đủ lịch sử để calibrate
+const PROB_KERNEL_SIGMA_C = Number(process.env.PROB_KERNEL_SIGMA_C || 0.8);
+// Số mẫu (ngày x sân bay) tối thiểu trước khi dùng bias/RMSE lịch sử của ensemble
+const PROB_CALIBRATION_MIN_SAMPLES = Number(process.env.PROB_CALIBRATION_MIN_SAMPLES || 5);
 const SNAPSHOT_DIR = path.join(__dirname, 'snapshots');
 const ACTUALS_FILE = path.join(SNAPSHOT_DIR, 'actuals.json');
 
@@ -39,6 +44,7 @@ const OPEN_METEO_MODELS = [
 const OPEN_METEO_MODEL_AIRPORT_FILTER = {
   ukmo_uk_deterministic_2km: ['EGLC'],
 };
+const ENSEMBLE_MODELS = ['ecmwf_ifs025', 'gfs_seamless', 'icon_seamless'];
 const OPEN_METEO_OPTIONAL_MODELS = Object.keys(OPEN_METEO_MODEL_AIRPORT_FILTER);
 
 function getOpenMeteoModelsForAirport(airport) {
@@ -294,6 +300,7 @@ function getSourceUrl(source, airport) {
     return station ? `https://opendata.dwd.de/weather/local_forecasts/mos/MOSMIX_L/single_stations/${station.id}/kml/MOSMIX_L_LATEST_${station.id}.kmz` : '';
   }
   if (source === 'AEMET') return 'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/28079';
+  if (source === 'Open-Meteo Ensemble') return buildEnsembleUrl(airport, ENSEMBLE_MODELS.join(','));
   return '';
 }
 
@@ -583,6 +590,221 @@ async function fetchEcmwfAirport(airport) {
   return buildForecastResult(airport, source, label, sourceUrl, {
     ...normalized,
     raw: `temperature_2m_max=${tempMax}°C; date=${data.daily?.time?.[0] || 'today'}; model=ecmwf_ifs025`,
+  });
+}
+
+function buildEnsembleUrl(airport, models) {
+  const url = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
+  url.searchParams.set('latitude', airport.latitude);
+  url.searchParams.set('longitude', airport.longitude);
+  url.searchParams.set('hourly', 'temperature_2m');
+  url.searchParams.set('models', models);
+  url.searchParams.set('forecast_days', '3');
+  url.searchParams.set('timezone', 'auto');
+  return url.toString();
+}
+
+function extractEnsembleDailyMax(data, targetDate) {
+  // timezone=auto nên hourly.time là giờ địa phương; mỗi key temperature_2m* là một member
+  const times = data.hourly?.time || [];
+  const indexes = times
+    .map((time, index) => ({ time, index }))
+    .filter((item) => String(item.time).slice(0, 10) === targetDate)
+    .map((item) => item.index);
+
+  if (!indexes.length) return [];
+
+  const members = [];
+  for (const [key, series] of Object.entries(data.hourly || {})) {
+    if (!key.startsWith('temperature_2m') || !Array.isArray(series)) continue;
+
+    let max = null;
+    for (const index of indexes) {
+      const value = series[index];
+      if (typeof value === 'number' && (max === null || value > max)) max = value;
+    }
+    if (max !== null) members.push(max);
+  }
+
+  return members;
+}
+
+async function fetchEnsembleMembersForAirport(airport, targetDate) {
+  const results = await Promise.allSettled(ENSEMBLE_MODELS.map(async (model) => {
+    const data = await fetchJsonWithRetry(buildEnsembleUrl(airport, model));
+    return { model, members: extractEnsembleDailyMax(data, targetDate) };
+  }));
+
+  const members = [];
+  const modelCounts = {};
+  const errors = [];
+
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      modelCounts[result.value.model] = result.value.members.length;
+      members.push(...result.value.members);
+    } else {
+      errors.push(`${ENSEMBLE_MODELS[index]}: ${sanitizeSecret(result.reason?.message || 'ensemble fetch failed')}`);
+    }
+  });
+
+  return { members, modelCounts, errors };
+}
+
+function quantile(sortedValues, q) {
+  if (!sortedValues.length) return null;
+  const position = (sortedValues.length - 1) * q;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  const weight = position - lower;
+  return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+}
+
+function erf(x) {
+  // Xấp xỉ Abramowitz & Stegun 7.1.26, sai số < 1.5e-7
+  const sign = x < 0 ? -1 : 1;
+  const absX = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * absX);
+  const poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+  return sign * (1 - poly * Math.exp(-absX * absX));
+}
+
+function normCdf(x) {
+  return 0.5 * (1 + erf(x / Math.SQRT2));
+}
+
+function getEnsembleCalibration(airportCode) {
+  const evaluation = buildEvaluation();
+  const rows = evaluation.summaryByAirport[airportCode] || [];
+  const historical = rows.find((row) => row.source === 'Open-Meteo Ensemble');
+
+  if (!historical || historical.count < PROB_CALIBRATION_MIN_SAMPLES) {
+    return { bias: 0, rmse: null, samples: historical?.count || 0, calibrated: false };
+  }
+
+  return { bias: historical.biasC, rmse: historical.rmseC, samples: historical.count, calibrated: true };
+}
+
+function computeProbabilityBins(members, sigma) {
+  const min = Math.min(...members);
+  const max = Math.max(...members);
+  const start = Math.floor(min - 2 * sigma);
+  const end = Math.ceil(max + 2 * sigma);
+  const bins = [];
+
+  for (let t = start; t <= end; t += 1) {
+    // METAR/Polymarket ghi nhận độ nguyên nên bucket t°C tương ứng khoảng [t-0.5, t+0.5)
+    let pEqual = 0;
+    let pAtLeast = 0;
+    for (const member of members) {
+      pEqual += normCdf((t + 0.5 - member) / sigma) - normCdf((t - 0.5 - member) / sigma);
+      pAtLeast += 1 - normCdf((t - 0.5 - member) / sigma);
+    }
+    bins.push({
+      temperatureC: t,
+      pEqual: pEqual / members.length,
+      pAtLeast: pAtLeast / members.length,
+    });
+  }
+
+  return bins.filter((bin, index) => bin.pEqual >= 0.001 || (index > 0 && bins[index - 1].pEqual >= 0.001 && bin.pAtLeast >= 0.001));
+}
+
+async function buildAirportProbabilities(airport, targetDate) {
+  const { members, modelCounts, errors } = await fetchEnsembleMembersForAirport(airport, targetDate);
+
+  if (!members.length) {
+    return {
+      code: airport.code,
+      name: airport.name,
+      date: targetDate,
+      memberCount: 0,
+      errors: errors.length ? errors : [`Không có member ensemble nào cho ${airport.code} ngày ${targetDate}`],
+    };
+  }
+
+  const calibration = getEnsembleCalibration(airport.code);
+  const corrected = members.map((value) => value - calibration.bias).sort((left, right) => left - right);
+  const mean = corrected.reduce((sum, value) => sum + value, 0) / corrected.length;
+  const variance = corrected.reduce((sum, value) => sum + (value - mean) ** 2, 0) / corrected.length;
+
+  // RMSE lịch sử là tổng sai số; trừ đi phần spread member đã thể hiện để tránh đếm đôi
+  let sigma = PROB_KERNEL_SIGMA_C;
+  if (calibration.calibrated && calibration.rmse) {
+    sigma = Math.sqrt(Math.max(calibration.rmse ** 2 - variance, 0.16));
+  }
+  sigma = Math.min(Math.max(sigma, 0.4), 3);
+
+  return {
+    code: airport.code,
+    name: airport.name,
+    date: targetDate,
+    memberCount: corrected.length,
+    modelCounts,
+    errors,
+    calibration: {
+      biasC: roundOne(calibration.bias),
+      historicalRmseC: calibration.rmse,
+      samples: calibration.samples,
+      calibrated: calibration.calibrated,
+      kernelSigmaC: roundOne(sigma),
+    },
+    stats: {
+      meanC: roundOne(mean),
+      medianC: roundOne(quantile(corrected, 0.5)),
+      p10C: roundOne(quantile(corrected, 0.1)),
+      p90C: roundOne(quantile(corrected, 0.9)),
+      minC: roundOne(corrected[0]),
+      maxC: roundOne(corrected[corrected.length - 1]),
+    },
+    members: corrected.map(roundOne),
+    bins: computeProbabilityBins(corrected, sigma).map((bin) => ({
+      temperatureC: bin.temperatureC,
+      pEqual: Math.round(bin.pEqual * 1000) / 1000,
+      pAtLeast: Math.round(bin.pAtLeast * 1000) / 1000,
+    })),
+  };
+}
+
+async function buildProbabilities(targetDate) {
+  const results = [];
+
+  for (const airport of AIRPORTS) {
+    const date = targetDate || getLocalDateKey(new Date(), airport.timeZone);
+    try {
+      results.push(await buildAirportProbabilities(airport, date));
+    } catch (error) {
+      results.push({
+        code: airport.code,
+        name: airport.name,
+        date,
+        memberCount: 0,
+        errors: [sanitizeSecret(error.message || 'Ensemble probabilities failed')],
+      });
+    }
+  }
+
+  return results;
+}
+
+async function fetchEnsembleMedianAirport(airport) {
+  const source = 'Open-Meteo Ensemble';
+  const label = 'Ensemble median (EC+GFS+ICON)';
+  const sourceUrl = getSourceUrl(source, airport);
+  const targetDate = getLocalDateKey(new Date(), airport.timeZone);
+  const { members, modelCounts, errors } = await fetchEnsembleMembersForAirport(airport, targetDate);
+
+  if (!members.length) {
+    throw new Error(`Không có member ensemble cho ${airport.code}: ${errors.join(' | ') || 'no data'}`);
+  }
+
+  const sorted = [...members].sort((left, right) => left - right);
+  const median = quantile(sorted, 0.5);
+  const modelSummary = Object.entries(modelCounts).map(([model, count]) => `${model}=${count}`).join(', ');
+
+  return buildForecastResult(airport, source, label, sourceUrl, {
+    ...normalizeTemperature(median, 'C'),
+    raw: `median của ${sorted.length} members (${modelSummary}); p10=${roundOne(quantile(sorted, 0.1))}°C; p90=${roundOne(quantile(sorted, 0.9))}°C; date=${targetDate}`,
   });
 }
 
@@ -896,6 +1118,7 @@ async function fetchAirportExternalSources(airport) {
     settleSource(airport, 'Wunderground', 'Wunderground', getSourceUrl('Wunderground', airport), fetchWundergroundAirport),
     settleSource(airport, 'MET Norway', 'MET Norway / Yr.no', getSourceUrl('MET Norway', airport), fetchMetNorwayAirport),
     settleSource(airport, 'ECMWF IFS', 'ECMWF IFS (Open-Meteo)', getSourceUrl('ECMWF IFS', airport), fetchEcmwfAirport),
+    settleSource(airport, 'Open-Meteo Ensemble', 'Ensemble median (EC+GFS+ICON)', getSourceUrl('Open-Meteo Ensemble', airport), fetchEnsembleMedianAirport),
     settleSource(airport, 'Visual Crossing', 'Visual Crossing', getSourceUrl('Visual Crossing', airport), fetchVisualCrossingAirport),
     settleSource(airport, 'WeatherAPI.com', 'WeatherAPI.com', getSourceUrl('WeatherAPI.com', airport), fetchWeatherApiAirport),
     settleSource(airport, 'OpenWeather', 'OpenWeather', getSourceUrl('OpenWeather', airport), fetchOpenWeatherAirport),
@@ -959,6 +1182,7 @@ function getExpectedSnapshotSources(airport) {
     'Wunderground',
     'MET Norway',
     'ECMWF IFS',
+    'Open-Meteo Ensemble',
     'Visual Crossing',
     'WeatherAPI.com',
     'OpenWeather',
@@ -1398,6 +1622,45 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && requestUrl.pathname === '/api/probabilities') {
+    try {
+      const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
+      const dateParam = requestUrl.searchParams.get('date');
+
+      if (dateParam && !/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+        sendJson(res, 400, { error: 'date phải có dạng YYYY-MM-DD' });
+        return;
+      }
+
+      // Chỉ cache cho request mặc định (hôm nay); date tùy chọn luôn tính mới
+      if (!dateParam) {
+        const cached = forceRefresh ? null : readCache(PROBABILITIES_CACHE_FILE);
+        if (cached) {
+          sendJson(res, 200, { cached: true, ...cached });
+          return;
+        }
+      }
+
+      const results = await buildProbabilities(dateParam || null);
+      const payload = {
+        createdAt: Date.now(),
+        ttlMs: CACHE_TTL_MS,
+        ensembleModels: ENSEMBLE_MODELS,
+        results,
+      };
+
+      if (!dateParam) {
+        writeCache(PROBABILITIES_CACHE_FILE, payload);
+      }
+
+      sendJson(res, 200, { cached: false, ...payload });
+    } catch (error) {
+      console.error('Probabilities API failed:', sanitizeSecret(error.message));
+      sendJson(res, 500, { error: sanitizeSecret(error.message || 'Probabilities API failed') });
+    }
+    return;
+  }
+
   if (req.method === 'GET' && requestUrl.pathname === '/api/wunderground') {
     try {
       const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
@@ -1433,7 +1696,7 @@ const server = http.createServer(async (req, res) => {
       const payload = {
         createdAt: Date.now(),
         ttlMs: CACHE_TTL_MS,
-        sources: ['Wunderground', 'MET Norway', 'ECMWF IFS', 'Visual Crossing', 'WeatherAPI.com', 'OpenWeather', 'Tomorrow.io', 'DWD MOSMIX', 'AEMET'],
+        sources: ['Wunderground', 'MET Norway', 'ECMWF IFS', 'Open-Meteo Ensemble', 'Visual Crossing', 'WeatherAPI.com', 'OpenWeather', 'Tomorrow.io', 'DWD MOSMIX', 'AEMET'],
         results,
       };
       writeCache(EXTERNAL_CACHE_FILE, payload);

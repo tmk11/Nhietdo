@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Nhiệt độ cao nhất theo model Open-Meteo</title>
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
   <main class="page-shell">
@@ -23,6 +23,19 @@
     </section>
 
     <section id="airportGrid" class="airport-grid"></section>
+
+    <section class="analysis-panel">
+      <div class="analysis-header">
+        <div>
+          <p class="eyebrow">Polymarket edge</p>
+          <h2>Xác suất nhiệt độ cao nhất theo từng mức °C</h2>
+          <p class="subtitle">Phân phối từ ~100 member ensemble (ECMWF ENS, GFS ENS, ICON EPS), hiệu chỉnh bias/sigma theo dữ liệu thực tế đã nhập. Nhập giá Polymarket (¢) để tính EV: <strong>EV = xác suất − giá</strong>. Bucket t°C tương ứng nhiệt độ ghi nhận làm tròn độ nguyên (METAR).</p>
+        </div>
+        <button id="loadProbabilitiesButton" type="button">Tính xác suất</button>
+      </div>
+      <p id="probabilitiesStatus" class="actuals-status">Chưa tải phân phối xác suất.</p>
+      <div id="probabilitiesTable" class="evaluation-table"></div>
+    </section>
 
     <section class="analysis-panel">
       <div class="analysis-header">
@@ -68,6 +81,6 @@
     </div>
   </template>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
