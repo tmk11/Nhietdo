@@ -40,6 +40,9 @@ const saveActualsButton = document.querySelector("#saveActualsButton");
 const loadEvaluationButton = document.querySelector("#loadEvaluationButton");
 const actualsStatus = document.querySelector("#actualsStatus");
 const evaluationTable = document.querySelector("#evaluationTable");
+const loadProbabilitiesButton = document.querySelector("#loadProbabilitiesButton");
+const probabilitiesStatus = document.querySelector("#probabilitiesStatus");
+const probabilitiesTable = document.querySelector("#probabilitiesTable");
 const airportTemplate = document.querySelector("#airportCardTemplate");
 const modelRowTemplate = document.querySelector("#modelRowTemplate");
 
@@ -373,9 +376,136 @@ async function loadEvaluation() {
   }
 }
 
+function formatPercent(value) {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function renderProbabilities(payload) {
+  const results = payload.results || [];
+
+  if (!results.length) {
+    probabilitiesTable.innerHTML = "<p>Không có dữ liệu xác suất.</p>";
+    return;
+  }
+
+  const sections = results.map((result) => {
+    const airport = AIRPORTS.find((item) => item.code === result.code);
+    const title = `<strong>${result.code}</strong> · ${airport?.name || result.name || ""} · ${result.date}`;
+
+    if (!result.memberCount) {
+      return `
+        <details class="airport-evaluation" open>
+          <summary>${title}</summary>
+          <p class="prob-error">Không lấy được ensemble: ${(result.errors || []).join(" | ") || "không rõ nguyên nhân"}</p>
+        </details>
+      `;
+    }
+
+    const stats = result.stats || {};
+    const calibration = result.calibration || {};
+    const meta = [
+      `${result.memberCount} members`,
+      `median ${stats.medianC}°C`,
+      `p10–p90: ${stats.p10C}–${stats.p90C}°C`,
+      calibration.calibrated
+        ? `đã hiệu chỉnh: bias ${calibration.biasC}°C, RMSE ${calibration.historicalRmseC}°C (${calibration.samples} mẫu)`
+        : `chưa đủ lịch sử để hiệu chỉnh (sigma mặc định ${calibration.kernelSigmaC}°C)`,
+    ].join(" · ");
+
+    const rows = (result.bins || []).map((bin) => `
+      <tr>
+        <td>${bin.temperatureC}°C</td>
+        <td>${formatPercent(bin.pEqual)}</td>
+        <td>${formatPercent(bin.pAtLeast)}</td>
+        <td><input type="number" class="market-price-input" min="0" max="100" step="0.1" placeholder="¢"
+          data-probability="${bin.pEqual}" data-airport="${result.code}" data-temp="${bin.temperatureC}" /></td>
+        <td class="ev-cell" data-ev-for="${result.code}:${bin.temperatureC}">—</td>
+      </tr>
+    `).join("");
+
+    return `
+      <details class="airport-evaluation" open>
+        <summary>${title}</summary>
+        <p class="prob-meta">${meta}</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Bucket</th>
+              <th>P(= t°C)</th>
+              <th>P(≥ t°C)</th>
+              <th>Giá YES (¢)</th>
+              <th>EV mua YES</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </details>
+    `;
+  });
+
+  probabilitiesTable.innerHTML = sections.join("");
+}
+
+function updateExpectedValue(input) {
+  const probability = Number(input.dataset.probability);
+  const evCell = probabilitiesTable.querySelector(`[data-ev-for="${input.dataset.airport}:${input.dataset.temp}"]`);
+  if (!evCell) return;
+
+  if (input.value === "") {
+    evCell.textContent = "—";
+    evCell.className = "ev-cell";
+    return;
+  }
+
+  const priceCents = Number(input.value);
+  if (!Number.isFinite(priceCents) || priceCents <= 0 || priceCents >= 100) {
+    evCell.textContent = "Giá 0–100¢";
+    evCell.className = "ev-cell";
+    return;
+  }
+
+  // EV mỗi share YES giá q¢: thắng nhận 100¢ ⇒ EV = 100p − q (¢); ROI = EV / q
+  const evCents = 100 * probability - priceCents;
+  const roi = evCents / priceCents;
+  evCell.textContent = `${evCents >= 0 ? "+" : ""}${evCents.toFixed(1)}¢ (${(roi * 100).toFixed(0)}%)`;
+  evCell.className = `ev-cell ${evCents > 0 ? "ev-positive" : "ev-negative"}`;
+}
+
+async function loadProbabilities(forceRefresh = false) {
+  loadProbabilitiesButton.disabled = true;
+  probabilitiesStatus.textContent = "Đang tải ~100 member ensemble (ECMWF/GFS/ICON)...";
+
+  try {
+    const response = await fetch(`/api/probabilities${forceRefresh ? "?refresh=1" : ""}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+
+    renderProbabilities(payload);
+    const okCount = (payload.results || []).filter((result) => result.memberCount > 0).length;
+    const time = new Date(payload.createdAt).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "medium" });
+    probabilitiesStatus.textContent = `Xác suất cho ${okCount}/${AIRPORTS.length} sân bay${payload.cached ? " (cache)" : ""} lúc ${time}.`;
+  } catch (error) {
+    probabilitiesStatus.textContent = `Lỗi tải xác suất: ${error.message}`;
+    probabilitiesTable.innerHTML = "";
+  } finally {
+    loadProbabilitiesButton.disabled = false;
+  }
+}
+
+probabilitiesTable.addEventListener("input", (event) => {
+  if (event.target.classList.contains("market-price-input")) {
+    updateExpectedValue(event.target);
+  }
+});
+
+loadProbabilitiesButton.addEventListener("click", () => loadProbabilities(true));
 refreshButton.addEventListener("click", () => loadForecasts({ forceRefresh: true }));
 saveActualsButton.addEventListener("click", saveActuals);
 loadEvaluationButton.addEventListener("click", loadEvaluation);
 initializeActualsForm();
 loadForecasts();
 loadEvaluation();
+loadProbabilities();
